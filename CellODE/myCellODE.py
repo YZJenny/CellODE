@@ -396,7 +396,12 @@ def generatePairedSample(adata, outSample, perturbation):
             annList_control.append(control_cells)
 
     if len(annList_Pertb) > 0:
-        return ad.concat(annList_Pertb), ad.concat(annList_control)
+        Xtr_anndata = ad.concat(annList_Pertb)
+        ytr_anndata = ad.concat(annList_control)
+        print(f"  DEBUG: Xtr shape={Xtr_anndata.shape}, ytr shape={ytr_anndata.shape}")
+        if Xtr_anndata.shape[0] != ytr_anndata.shape[0]:
+            print(f"  ERROR: Shape mismatch! Xtr has {Xtr_anndata.shape[0]} cells, ytr has {ytr_anndata.shape[0]} cells")
+        return Xtr_anndata, ytr_anndata
     return None, None
 
 
@@ -425,6 +430,12 @@ def build_known_cell_types(adata, outSample, perturbation):
             perturb_expr = perturb_cells.X.toarray() if hasattr(perturb_cells.X, 'toarray') else perturb_cells.X
 
             # 简化：用原始表达差的均值作为delta代理
+            if control_expr.shape[0] != perturb_expr.shape[0]:
+                print(f"  WARNING: {known_ct} control has {control_expr.shape[0]} cells, perturb has {perturb_expr.shape[0]} cells, using min")
+                min_cells = min(control_expr.shape[0], perturb_expr.shape[0])
+                control_expr = control_expr[:min_cells]
+                perturb_expr = perturb_expr[:min_cells]
+
             delta_mean = (perturb_expr - control_expr).mean(axis=0)
             control_mean = control_expr.mean(axis=0)
 
@@ -582,9 +593,15 @@ def Kang_OutSample(DataSet, outSample):
         Xtr = Xtr_anndata.X.toarray() if hasattr(Xtr_anndata.X, 'toarray') else Xtr_anndata.X
         ytr = ytr_anndata.X.toarray() if hasattr(ytr_anndata.X, 'toarray') else ytr_anndata.X
 
+        print(f"  DEBUG: Xtr numpy shape={Xtr.shape}, ytr numpy shape={ytr.shape}")
+        if Xtr.shape[0] != ytr.shape[0]:
+            raise ValueError(f"Shape mismatch before split: Xtr has {Xtr.shape[0]} rows, ytr has {ytr.shape[0]} rows")
+
         train_size = int(0.8 * Xtr.shape[0])
         Xtr_train, Xtr_val = Xtr[:train_size], Xtr[train_size:]
         ytr_train, ytr_val = ytr[:train_size], ytr[train_size:]
+
+        print(f"  DEBUG: Xtr_train shape={Xtr_train.shape}, ytr_train shape={ytr_train.shape}")
 
         # 获取测试数据
         Xte_control = adata[(adata.obs['condition2'] == 'control') &
