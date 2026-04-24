@@ -150,7 +150,7 @@ class CellTypeAwareAttention(nn.Module):
 
         assert latent_dim % num_heads == 0, "latent_dim must be divisible by num_heads"
 
-        # 多头注意力
+        # 多头注意力 - 简化为手动实现
         self.W_q = nn.Linear(latent_dim, latent_dim)
         self.W_k = nn.Linear(latent_dim, latent_dim)
         self.W_v = nn.Linear(latent_dim, latent_dim)
@@ -163,25 +163,17 @@ class CellTypeAwareAttention(nn.Module):
             nn.Linear(latent_dim, 1)
         )
 
-        # 多头聚合器
-        self.aggregator = nn.MultiheadAttention(
-            embed_dim=latent_dim,
-            num_heads=num_heads,
-            batch_first=True
-        )
-
-        # 响应模式GRU
+        # 简单GRU替代复杂的MultiheadAttention
         self.response_gru = nn.GRU(
             input_size=latent_dim,
             hidden_size=latent_dim,
-            num_layers=2,
-            batch_first=True,
-            bidirectional=True
+            num_layers=1,
+            batch_first=True
         )
 
         # 门控融合网络
         self.gate_net = nn.Sequential(
-            nn.Linear(latent_dim * 3, latent_dim),
+            nn.Linear(latent_dim * 2, latent_dim),
             nn.Sigmoid()
         )
 
@@ -223,37 +215,24 @@ class CellTypeAwareAttention(nn.Module):
         batch_size = S_c.size(0)
         num_known = known_responses.size(0)
 
-        print(f"  ATTN DEBUG: S_c={S_c.shape}, pert_emb={pert_emb.shape}, known_responses={known_responses.shape}, known_cell_types={known_cell_types.shape}")
-
-        # 1. 计算细胞类型相似度
+        # 1. 计算细胞类型相似度并加权聚合
         sim_weights = self.compute_cell_similarity(S_c, known_cell_types)  # [B, num_known]
-        print(f"  ATTN DEBUG: sim_weights={sim_weights.shape}")
 
-        # 2. 注意力聚合
-        Q = self.W_q(S_c).unsqueeze(1)  # [B, 1, latent]
-        K = self.W_k(known_cell_types).unsqueeze(0)  # [1, num_known, latent]
-        V = self.W_v(known_responses).unsqueeze(0)  # [1, num_known, latent]
-        print(f"  ATTN DEBUG: Q={Q.shape}, K={K.shape}, V={V.shape}")
-
-        attn_output, _ = self.aggregator(Q, K, V)  # [B, 1, latent]
-        print(f"  ATTN DEBUG: attn_output after aggregator={attn_output.shape}")
+        # sim_weights @ known_responses: [B, num_known] @ [num_known, latent] -> [B, latent]
+        attn_output = torch.bmm(sim_weights.unsqueeze(1), known_responses.unsqueeze(0).expand(batch_size, -1, -1))
         attn_output = attn_output.squeeze(1)  # [B, latent]
         attn_output = self.norm1(attn_output)
 
-        # 3. GRU聚合响应模式
+        # 2. GRU处理扰动增强的响应模式
         pert_emb_expanded = pert_emb.unsqueeze(1)  # [B, 1, latent]
-        known_responses_expanded = known_responses.unsqueeze(0).expand(batch_size, -1, -1)
-        print(f"  ATTN DEBUG: pert_emb_expanded={pert_emb_expanded.shape}, known_responses_expanded={known_responses_expanded.shape}")
-        gru_input = known_responses_expanded + pert_emb_expanded
-        print(f"  ATTN DEBUG: gru_input={gru_input.shape}")
-        gru_out, _ = self.response_gru(gru_input)
-        print(f"  ATTN DEBUG: gru_out={gru_out.shape}")
+        known_responses_expanded = known_responses.unsqueeze(0).expand(batch_size, -1, -1)  # [B, num_known, latent]
+        gru_input = known_responses_expanded + pert_emb_expanded  # [B, num_known, latent]
+        gru_out, _ = self.response_gru(gru_input)  # [B, num_known, latent]
         gru_agg = gru_out.mean(dim=1)  # [B, latent]
         gru_agg = self.norm2(gru_agg)
 
-        # 4. 门控融合
-        combined = torch.cat([attn_output, gru_agg, S_c], dim=-1)
-        print(f"  ATTN DEBUG: combined={combined.shape}")
+        # 3. 门控融合
+        combined = torch.cat([attn_output, gru_agg], dim=-1)
         gate = self.gate_net(combined)
         migrated = gate * attn_output + (1 - gate) * gru_agg
 
