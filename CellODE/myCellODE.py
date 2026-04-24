@@ -223,27 +223,37 @@ class CellTypeAwareAttention(nn.Module):
         batch_size = S_c.size(0)
         num_known = known_responses.size(0)
 
+        print(f"  ATTN DEBUG: S_c={S_c.shape}, pert_emb={pert_emb.shape}, known_responses={known_responses.shape}, known_cell_types={known_cell_types.shape}")
+
         # 1. 计算细胞类型相似度
         sim_weights = self.compute_cell_similarity(S_c, known_cell_types)  # [B, num_known]
+        print(f"  ATTN DEBUG: sim_weights={sim_weights.shape}")
 
         # 2. 注意力聚合
         Q = self.W_q(S_c).unsqueeze(1)  # [B, 1, latent]
         K = self.W_k(known_cell_types).unsqueeze(0)  # [1, num_known, latent]
         V = self.W_v(known_responses).unsqueeze(0)  # [1, num_known, latent]
+        print(f"  ATTN DEBUG: Q={Q.shape}, K={K.shape}, V={V.shape}")
 
         attn_output, _ = self.aggregator(Q, K, V)  # [B, 1, latent]
+        print(f"  ATTN DEBUG: attn_output after aggregator={attn_output.shape}")
         attn_output = attn_output.squeeze(1)  # [B, latent]
         attn_output = self.norm1(attn_output)
 
         # 3. GRU聚合响应模式
         pert_emb_expanded = pert_emb.unsqueeze(1)  # [B, 1, latent]
-        gru_input = known_responses.unsqueeze(0).expand(batch_size, -1, -1) + pert_emb_expanded
+        known_responses_expanded = known_responses.unsqueeze(0).expand(batch_size, -1, -1)
+        print(f"  ATTN DEBUG: pert_emb_expanded={pert_emb_expanded.shape}, known_responses_expanded={known_responses_expanded.shape}")
+        gru_input = known_responses_expanded + pert_emb_expanded
+        print(f"  ATTN DEBUG: gru_input={gru_input.shape}")
         gru_out, _ = self.response_gru(gru_input)
+        print(f"  ATTN DEBUG: gru_out={gru_out.shape}")
         gru_agg = gru_out.mean(dim=1)  # [B, latent]
         gru_agg = self.norm2(gru_agg)
 
         # 4. 门控融合
         combined = torch.cat([attn_output, gru_agg, S_c], dim=-1)
+        print(f"  ATTN DEBUG: combined={combined.shape}")
         gate = self.gate_net(combined)
         migrated = gate * attn_output + (1 - gate) * gru_agg
 
@@ -629,6 +639,8 @@ def Kang_OutSample(DataSet, outSample):
                 'known_cell_types': torch.tensor(known_ct, dtype=torch.float32).cuda(),
                 'known_deltas': torch.tensor(known_delta, dtype=torch.float32).cuda()
             }
+            print(f"  DEBUG: known_cell_types shape={known_data['known_cell_types'].shape}")
+            print(f"  DEBUG: known_deltas shape={known_data['known_deltas'].shape}")
 
         print(f"Train: {Xtr.shape[0]}, Test: {Xte.shape[0]}")
 
