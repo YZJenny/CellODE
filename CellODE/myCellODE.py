@@ -547,7 +547,7 @@ def predictCellODEv2(model, Xte, pert_idx, gene_num, num_perts):
 
 def Kang_OutSample(DataSet, outSample):
     """对单个OOD细胞类型进行扰动预测"""
-    basePath = f'/root/autodl-tmp/home/project/Pertb_benchmark/DataSet/{DataSet}/outSample/hvg5000/CellODEv2/'
+    basePath = f'/root/autodl-tmp/home/project/Pertb_benchmark/DataSet/{DataSet}/outSample/hvg5000/CellODE/'
     tmp = '{}/{}'.format(basePath, outSample)
     if not os.path.isdir(tmp):
         os.makedirs(tmp)
