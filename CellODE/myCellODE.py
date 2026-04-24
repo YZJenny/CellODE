@@ -405,7 +405,7 @@ def generatePairedSample(adata, outSample, perturbation):
     return None, None
 
 
-def build_known_cell_types(adata, outSample, perturbation):
+def build_known_cell_types(adata, outSample, perturbation, gene_encoder):
     """
     构建已知细胞类型的参考数据（用于注意力机制）
 
@@ -418,29 +418,39 @@ def build_known_cell_types(adata, outSample, perturbation):
 
     known_cellTypes = [ct for ct in adata.obs['condition1'].unique() if ct != outSample]
 
-    for known_ct in known_cellTypes:
-        control_cells = adata[(adata.obs['condition1'] == known_ct) &
-                             (adata.obs['condition2'] == 'control')]
-        perturb_cells = adata[(adata.obs['condition1'] == known_ct) &
-                             (adata.obs['condition2'] == perturbation)]
+    gene_encoder.eval()
+    with torch.no_grad():
+        for known_ct in known_cellTypes:
+            control_cells = adata[(adata.obs['condition1'] == known_ct) &
+                                 (adata.obs['condition2'] == 'control')]
+            perturb_cells = adata[(adata.obs['condition1'] == known_ct) &
+                                 (adata.obs['condition2'] == perturbation)]
 
-        if control_cells.n_obs > 0 and perturb_cells.n_obs > 0:
-            # 使用均值作为表示
-            control_expr = control_cells.X.toarray() if hasattr(control_cells.X, 'toarray') else control_cells.X
-            perturb_expr = perturb_cells.X.toarray() if hasattr(perturb_cells.X, 'toarray') else perturb_cells.X
+            if control_cells.n_obs > 0 and perturb_cells.n_obs > 0:
+                # 使用均值作为表示
+                control_expr = control_cells.X.toarray() if hasattr(control_cells.X, 'toarray') else control_cells.X
+                perturb_expr = perturb_cells.X.toarray() if hasattr(perturb_cells.X, 'toarray') else perturb_cells.X
 
-            # 简化：用原始表达差的均值作为delta代理
-            if control_expr.shape[0] != perturb_expr.shape[0]:
-                print(f"  WARNING: {known_ct} control has {control_expr.shape[0]} cells, perturb has {perturb_expr.shape[0]} cells, using min")
-                min_cells = min(control_expr.shape[0], perturb_expr.shape[0])
-                control_expr = control_expr[:min_cells]
-                perturb_expr = perturb_expr[:min_cells]
+                # 简化：用原始表达差的均值作为delta代理
+                if control_expr.shape[0] != perturb_expr.shape[0]:
+                    print(f"  WARNING: {known_ct} control has {control_expr.shape[0]} cells, perturb has {perturb_expr.shape[0]} cells, using min")
+                    min_cells = min(control_expr.shape[0], perturb_expr.shape[0])
+                    control_expr = control_expr[:min_cells]
+                    perturb_expr = perturb_expr[:min_cells]
 
-            delta_mean = (perturb_expr - control_expr).mean(axis=0)
-            control_mean = control_expr.mean(axis=0)
+                # 通过编码器获取潜在表示
+                control_tensor = torch.tensor(control_expr, dtype=torch.float32).cuda()
+                perturb_tensor = torch.tensor(perturb_expr, dtype=torch.float32).cuda()
 
-            known_cell_types_list.append(control_mean)
-            known_deltas_list.append(delta_mean)
+                control_repr = gene_encoder(control_tensor)  # [N, 256]
+                perturb_repr = gene_encoder(perturb_tensor)  # [N, 256]
+
+                # 计算潜在空间的delta
+                delta_repr = (perturb_repr - control_repr).mean(dim=0)  # [256]
+                control_repr_mean = control_repr.mean(dim=0)  # [256]
+
+                known_cell_types_list.append(control_repr_mean.cpu().numpy())
+                known_deltas_list.append(delta_repr.cpu().numpy())
 
     if len(known_cell_types_list) > 0:
         return np.array(known_cell_types_list), np.array(known_deltas_list)
@@ -610,8 +620,9 @@ def Kang_OutSample(DataSet, outSample):
                          (adata.obs['condition1'] == outSample)]
         Xte = Xte_control.X.toarray() if hasattr(Xte_control.X, 'toarray') else Xte_control.X
 
-        # 构建已知数据
-        known_ct, known_delta = build_known_cell_types(adata, outSample, perturbation)
+        # 构建已知数据（需要先创建一个编码器来获取潜在表示）
+        temp_encoder = GeneExpressionEncoder(gene_num, latent_dim=256).cuda()
+        known_ct, known_delta = build_known_cell_types(adata, outSample, perturbation, temp_encoder)
         known_data = None
         if known_ct is not None:
             known_data = {
