@@ -29,7 +29,7 @@ warnings.filterwarnings('ignore')
 
 
 # ============================================================
-# CellODE-v2 模型定义
+# CellODE 模型定义
 # ============================================================
 
 class CausalDisentangle(nn.Module):
